@@ -1,0 +1,92 @@
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Collection: users
+// Document ID: {userId}
+// Fields:
+//   - salary: number (required) - User's monthly salary
+//   - monthlyBudget: number (required) - User's planned monthly budget
+//   - updatedAt: string (optional) - ISO date string
+//
+// Collection: expenses
+// Document ID: {expenseId}
+// Fields:
+//   - amount: number (required, > 0) - Amount spent
+//   - category: string (required, enum) - Food, Travel, Shopping, Bills, Entertainment, Health, Other
+//   - date: string (required, ISO format) - Date of transaction
+//   - note: string (optional, max 200 chars) - Transaction details
+//   - uid: string (required) - Owner's user ID
+//
+// ===============================================================
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isDocOwner() {
+      return isAuthenticated() && request.auth.uid == resource.data.uid;
+    }
+
+    function uidUnchanged() {
+      return !('uid' in request.resource.data) || request.resource.data.uid == request.auth.uid;
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidDateString(dateStr) {
+      return dateStr is string && dateStr.matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}.*Z?$");
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['salary', 'monthlyBudget']) &&
+             data.salary is number && data.salary >= 0 &&
+             data.monthlyBudget is number && data.monthlyBudget >= 0;
+    }
+
+    function isValidExpense(data) {
+      let validCategories = ["Food", "Travel", "Shopping", "Bills", "Entertainment", "Health", "Other"];
+      return data.keys().hasAll(['amount', 'category', 'date', 'uid']) &&
+             data.amount is number && data.amount > 0 &&
+             data.category in validCategories &&
+             isValidDateString(data.date) &&
+             data.uid == request.auth.uid &&
+             (!('note' in data) || (data.note is string && data.note.size() <= 200));
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidUserProfile(request.resource.data);
+      allow update: if isOwner(userId) && isValidUserProfile(request.resource.data);
+    }
+
+    match /expenses/{expenseId} {
+      allow read: if isAuthenticated() && resource.data.uid == request.auth.uid;
+      allow create: if isAuthenticated() && isValidExpense(request.resource.data);
+      allow update: if isDocOwner() && isValidExpense(request.resource.data);
+      allow delete: if isDocOwner();
+    }
+  }
+}
